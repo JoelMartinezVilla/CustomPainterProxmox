@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dartssh2/dartssh2.dart';
+import 'package:path_provider/path_provider.dart';
 
 void main() {
   runApp(MyApp());
@@ -31,7 +33,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
   final TextEditingController _portController =
       TextEditingController(text: '22');
   final TextEditingController _userController = TextEditingController();
-  // Ahora este campo se usará para la ruta de la clave privada.
+  // Este campo se usará para la ruta de la clave privada.
   final TextEditingController _keyPathController = TextEditingController();
 
   @override
@@ -75,6 +77,22 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     }
   }
 
+  /// Guarda la configuración actual en un archivo JSON.
+  Future<void> _saveConfigurationToJson() async {
+    final config = {
+      'host': _hostController.text,
+      'port': int.parse(_portController.text),
+      'username': _userController.text,
+      'keyPath': _keyPathController.text,
+    };
+
+    // Obtiene el directorio de documentos propio de la aplicación.
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File('${directory.path}/proxmox_config.json');
+    await file.writeAsString(jsonEncode(config));
+    print('Configuración guardada en: ${file.path}');
+  }
+
   /// Función que se invoca al pulsar el botón "Conectar".
   Future<void> _connect() async {
     try {
@@ -84,6 +102,9 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
         username: _userController.text,
         keyPath: _keyPathController.text, // Ruta de la clave privada
       );
+
+      // Guardar la configuración en un JSON
+      await _saveConfigurationToJson();
 
       // Mostrar diálogo de conexión exitosa.
       showDialog(
@@ -103,7 +124,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
         ),
       );
 
-      // Una vez realizada la operación, cierra la conexión.
+      // Cierra la conexión cuando ya no se necesite.
       client.close();
     } catch (e) {
       // Mostrar error en caso de fallo.
@@ -215,7 +236,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
                   style: TextStyle(fontSize: 18, color: Colors.white),
                   decoration: InputDecoration(
                     border: InputBorder.none,
-                    hintText: "Ruta clave privada (.ssh/id_rsa)",
+                    hintText: "Ruta clave privada (ej. ~/.ssh/id_rsa)",
                     hintStyle: TextStyle(color: Colors.white70),
                     contentPadding:
                         EdgeInsets.symmetric(horizontal: 10, vertical: 15),
