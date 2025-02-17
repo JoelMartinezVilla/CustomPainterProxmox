@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 
 void main() {
   runApp(MyApp());
@@ -20,20 +21,20 @@ class MyApp extends StatelessWidget {
   }
 }
 
-/// Pantalla que dibuja el fondo y los bordes con CustomPainter,
-/// y posiciona TextFields para editar directamente.
+/// Pantalla que se divide en dos paneles:
+/// - Izquierdo: lista de SSH guardados en el archivo JSON.
+/// - Derecho: formulario de login para conectarse vía SSH.
 class CustomFormScreen extends StatefulWidget {
   @override
   _CustomFormScreenState createState() => _CustomFormScreenState();
 }
 
 class _CustomFormScreenState extends State<CustomFormScreen> {
-  // Controladores para cada campo de entrada.
+  // Controladores para el formulario de login.
   final TextEditingController _hostController = TextEditingController();
   final TextEditingController _portController =
       TextEditingController(text: '22');
   final TextEditingController _userController = TextEditingController();
-  // Este campo se usará para la ruta de la clave privada.
   final TextEditingController _keyPathController = TextEditingController();
 
   @override
@@ -55,20 +56,16 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     try {
       // Conectar al host en el puerto indicado.
       final socket = await SSHSocket.connect(host, port);
-
       // Leer el contenido del archivo de clave privada.
       final keyString = await File(keyPath).readAsString();
-
       // Convertir el contenido PEM en un objeto SSHPrivateKey usando el método actualizado.
       final privateKey = SSHKeyPair.fromPem(keyString);
-
       // Crear el cliente SSH utilizando la clave privada.
       final client = SSHClient(
         socket,
         username: username,
         identities: privateKey,
       );
-
       print('Conexión SSH establecida con $host:$port usando clave privada.');
       return client;
     } catch (e) {
@@ -77,7 +74,28 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     }
   }
 
+  /// Carga las configuraciones guardadas desde el archivo JSON.
+  Future<List<dynamic>> _loadSavedConfigs() async {
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File(path.join(directory.path, 'proxmox_config.json'));
+    if (await file.exists()) {
+      final content = await file.readAsString();
+      try {
+        final decoded = jsonDecode(content);
+        if (decoded is List) {
+          return decoded;
+        } else if (decoded is Map) {
+          return [decoded];
+        }
+      } catch (e) {
+        print("Error al decodificar JSON: $e");
+      }
+    }
+    return [];
+  }
+
   /// Guarda la configuración actual en un archivo JSON.
+  /// Se agrega la configuración al final de una lista.
   Future<void> _saveConfigurationToJson() async {
     final config = {
       'host': _hostController.text,
@@ -86,11 +104,27 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
       'keyPath': _keyPathController.text,
     };
 
-    // Obtiene el directorio de documentos propio de la aplicación.
     final directory = await getApplicationDocumentsDirectory();
-    final file = File('${directory.path}/proxmox_config.json');
-    await file.writeAsString(jsonEncode(config));
+    final file = File(path.join(directory.path, 'proxmox_config.json'));
+    List<dynamic> configs = [];
+    if (await file.exists()) {
+      final content = await file.readAsString();
+      try {
+        final decoded = jsonDecode(content);
+        if (decoded is List) {
+          configs = decoded;
+        } else if (decoded is Map) {
+          configs = [decoded];
+        }
+      } catch (e) {
+        configs = [];
+      }
+    }
+    configs.add(config);
+    await file.writeAsString(jsonEncode(configs));
     print('Configuración guardada en: ${file.path}');
+    // Actualizamos la UI para mostrar la nueva configuración
+    setState(() {});
   }
 
   /// Función que se invoca al pulsar el botón "Conectar".
@@ -100,13 +134,13 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
         host: _hostController.text,
         port: int.parse(_portController.text),
         username: _userController.text,
-        keyPath: _keyPathController.text, // Ruta de la clave privada
+        keyPath: _keyPathController.text,
       );
 
-      // Guardar la configuración en un JSON
+      // Guarda la configuración en el JSON (se acumulan todas las conexiones)
       await _saveConfigurationToJson();
 
-      // Mostrar diálogo de conexión exitosa.
+      // Muestra diálogo de conexión exitosa.
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -123,11 +157,10 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
           ],
         ),
       );
-
       // Cierra la conexión cuando ya no se necesite.
       client.close();
     } catch (e) {
-      // Mostrar error en caso de fallo.
+      // Muestra error en caso de fallo.
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -146,119 +179,158 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     }
   }
 
+  /// Panel izquierdo: muestra la lista de configuraciones SSH guardadas.
+  Widget _buildSavedConfigsPanel() {
+    return FutureBuilder<List<dynamic>>(
+      future: _loadSavedConfigs(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Center(child: CircularProgressIndicator());
+        }
+        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+          return Center(
+              child: Text("No hay configuraciones guardadas",
+                  style: TextStyle(color: Colors.white, fontSize: 16)));
+        }
+        final configs = snapshot.data!;
+        return ListView.builder(
+          padding: EdgeInsets.all(16),
+          itemCount: configs.length,
+          itemBuilder: (context, index) {
+            final config = configs[index];
+            return Card(
+              color: Colors.white.withOpacity(0.8),
+              child: ListTile(
+                title: Text(
+                  "${config['host']} : ${config['port']}",
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+                subtitle: Text("Usuario: ${config['username']}"),
+                onTap: () {
+                  // Al tocar, se rellenan los campos del login con la configuración seleccionada.
+                  setState(() {
+                    _hostController.text = config['host'];
+                    _portController.text = config['port'].toString();
+                    _userController.text = config['username'];
+                    _keyPathController.text = config['keyPath'];
+                  });
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  /// Panel derecho: formulario de login para conectarse vía SSH.
+  Widget _buildLoginPanel() {
+    return Padding(
+      padding: const EdgeInsets.all(16.0),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            TextField(
+              controller: _hostController,
+              style: TextStyle(fontSize: 18, color: Colors.white),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                hintText: "Host",
+                hintStyle: TextStyle(color: Colors.white70),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 15),
+              ),
+            ),
+            SizedBox(height: 15),
+            TextField(
+              controller: _portController,
+              style: TextStyle(fontSize: 18, color: Colors.white),
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                hintText: "Puerto",
+                hintStyle: TextStyle(color: Colors.white70),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 15),
+              ),
+            ),
+            SizedBox(height: 15),
+            TextField(
+              controller: _userController,
+              style: TextStyle(fontSize: 18, color: Colors.white),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                hintText: "Usuario",
+                hintStyle: TextStyle(color: Colors.white70),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 15),
+              ),
+            ),
+            SizedBox(height: 15),
+            TextField(
+              controller: _keyPathController,
+              style: TextStyle(fontSize: 18, color: Colors.white),
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                hintText: "Ruta clave privada (ej. ~/.ssh/id_rsa)",
+                hintStyle: TextStyle(color: Colors.white70),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 10, vertical: 15),
+              ),
+            ),
+            SizedBox(height: 15),
+            ElevatedButton(
+              onPressed: _connect,
+              style: ElevatedButton.styleFrom(
+                // primary: Colors.blue,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30),
+                ),
+              ),
+              child: Text("Conectar", style: TextStyle(fontSize: 20)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Usamos LayoutBuilder para calcular posiciones y dimensiones.
     return Scaffold(
       appBar: AppBar(
-        title: Text("Conectar a Proxmox"),
+        title: Text("Gestor Proxmox"),
       ),
       body: LayoutBuilder(
         builder: (context, constraints) {
-          double screenWidth = constraints.maxWidth;
-          // Definimos márgenes y dimensiones de los campos:
-          double startX = 50;
-          double fieldWidth = screenWidth - 100; // 50 de margen en cada lado
-          double fieldHeight = 60; // Se deja más espacio para el valor
-          double startY = 200;
-          double spacing = 15; // Espacio entre campos
+          double width = constraints.maxWidth;
+          double height = constraints.maxHeight;
+          double leftWidth = width * 0.5;
+          double rightWidth = width - leftWidth;
 
           return Stack(
             children: [
-              // Fondo y bordes dibujados con CustomPainter.
+              // CustomPainter que dibuja el fondo de cada panel y el divisor.
               CustomPaint(
-                size: Size(constraints.maxWidth, constraints.maxHeight),
-                painter: FormPainter(),
+                size: Size(width, height),
+                painter: SplitScreenPainter(),
               ),
-              // Campo "Host".
+              // Panel izquierdo: configuraciones guardadas.
               Positioned(
-                left: startX,
-                top: startY,
-                width: fieldWidth,
-                height: fieldHeight,
-                child: TextField(
-                  controller: _hostController,
-                  style: TextStyle(fontSize: 18, color: Colors.white),
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: "Host",
-                    hintStyle: TextStyle(color: Colors.white70),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 15),
-                  ),
-                ),
+                left: 0,
+                top: 0,
+                width: leftWidth,
+                height: height,
+                child: _buildSavedConfigsPanel(),
               ),
-              // Campo "Puerto".
+              // Panel derecho: formulario de login.
               Positioned(
-                left: startX,
-                top: startY + fieldHeight + spacing,
-                width: fieldWidth,
-                height: fieldHeight,
-                child: TextField(
-                  controller: _portController,
-                  style: TextStyle(fontSize: 18, color: Colors.white),
-                  keyboardType: TextInputType.number,
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: "Puerto",
-                    hintStyle: TextStyle(color: Colors.white70),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 15),
-                  ),
-                ),
-              ),
-              // Campo "Usuario".
-              Positioned(
-                left: startX,
-                top: startY + 2 * (fieldHeight + spacing),
-                width: fieldWidth,
-                height: fieldHeight,
-                child: TextField(
-                  controller: _userController,
-                  style: TextStyle(fontSize: 18, color: Colors.white),
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: "Usuario",
-                    hintStyle: TextStyle(color: Colors.white70),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 15),
-                  ),
-                ),
-              ),
-              // Campo "Ruta clave privada".
-              Positioned(
-                left: startX,
-                top: startY + 3 * (fieldHeight + spacing),
-                width: fieldWidth,
-                height: fieldHeight,
-                child: TextField(
-                  controller: _keyPathController,
-                  style: TextStyle(fontSize: 18, color: Colors.white),
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    hintText: "Ruta clave privada (ej. ~/.ssh/id_rsa)",
-                    hintStyle: TextStyle(color: Colors.white70),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 10, vertical: 15),
-                  ),
-                ),
-              ),
-              // Botón "Conectar".
-              Positioned(
-                left: startX,
-                top: startY + 4 * (fieldHeight + spacing),
-                width: fieldWidth,
-                height: fieldHeight,
-                child: ElevatedButton(
-                  onPressed: _connect,
-                  style: ElevatedButton.styleFrom(
-                    // primary: Colors.blue,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                  ),
-                  child: Text("Conectar", style: TextStyle(fontSize: 20)),
-                ),
+                left: leftWidth,
+                top: 0,
+                width: rightWidth,
+                height: height,
+                child: _buildLoginPanel(),
               ),
             ],
           );
@@ -268,46 +340,40 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
   }
 }
 
-/// CustomPainter que dibuja el fondo degradado y los bordes de los campos.
-/// Para el botón, dibuja un borde redondeado.
-class FormPainter extends CustomPainter {
+/// CustomPainter que dibuja dos fondos distintos para cada panel y un divisor vertical.
+class SplitScreenPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    // Fondo degradado.
-    Rect rect = Offset.zero & size;
-    Paint bgPaint = Paint()
+    // Fondo panel izquierdo.
+    Rect leftRect = Rect.fromLTWH(0, 0, size.width / 2, size.height);
+    Paint leftPaint = Paint()
       ..shader = LinearGradient(
-        colors: [Colors.blueAccent, Colors.lightBlueAccent],
+        colors: [Colors.blueGrey.shade700, Colors.blueGrey.shade500],
         begin: Alignment.topLeft,
+        end: Alignment.bottomLeft,
+      ).createShader(leftRect);
+    canvas.drawRect(leftRect, leftPaint);
+
+    // Fondo panel derecho.
+    Rect rightRect =
+        Rect.fromLTWH(size.width / 2, 0, size.width / 2, size.height);
+    Paint rightPaint = Paint()
+      ..shader = LinearGradient(
+        colors: [Colors.indigo.shade700, Colors.indigo.shade500],
+        begin: Alignment.topRight,
         end: Alignment.bottomRight,
-      ).createShader(rect);
-    canvas.drawRect(rect, bgPaint);
+      ).createShader(rightRect);
+    canvas.drawRect(rightRect, rightPaint);
 
-    // Parámetros de diseño (deben coincidir con los Positioned).
-    double startX = 50;
-    double startY = 200;
-    double fieldWidth = size.width - 100;
-    double fieldHeight = 60;
-    double spacing = 15;
-
-    Paint borderPaint = Paint()
-      ..color = Colors.white
-      ..strokeWidth = 2
-      ..style = PaintingStyle.stroke;
-
-    // Dibujar bordes para cada campo (Host, Puerto, Usuario, Ruta clave privada).
-    for (int i = 0; i < 4; i++) {
-      double top = startY + i * (fieldHeight + spacing);
-      Rect fieldRect = Rect.fromLTWH(startX, top, fieldWidth, fieldHeight);
-      canvas.drawRect(fieldRect, borderPaint);
-    }
-
-    // Para el botón, en lugar de un rectángulo normal, dibujamos un borde redondeado.
-    double buttonTop = startY + 4 * (fieldHeight + spacing);
-    Rect buttonRect = Rect.fromLTWH(startX, buttonTop, fieldWidth, fieldHeight);
-    RRect buttonRRect =
-        RRect.fromRectAndRadius(buttonRect, Radius.circular(30));
-    canvas.drawRRect(buttonRRect, borderPaint);
+    // Línea divisoria vertical.
+    Paint dividerPaint = Paint()
+      ..color = Colors.white70
+      ..strokeWidth = 2;
+    canvas.drawLine(
+      Offset(size.width / 2, 0),
+      Offset(size.width / 2, size.height),
+      dividerPaint,
+    );
   }
 
   @override
