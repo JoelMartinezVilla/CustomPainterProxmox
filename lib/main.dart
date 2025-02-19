@@ -3,10 +3,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as path;
+import 'package:path/path.dart' as p;
 
 void main() {
   runApp(MyApp());
+}
+
+/// Clase para representar cada entrada (archivo o carpeta).
+class FileEntry {
+  final String name;
+  final bool isDirectory;
+  FileEntry({required this.name, required this.isDirectory});
 }
 
 /// Widget principal de la aplicación.
@@ -21,8 +28,8 @@ class MyApp extends StatelessWidget {
   }
 }
 
-/// Pantalla que se divide en dos paneles:
-/// - Izquierdo: lista de SSH guardados en el archivo JSON.
+/// Pantalla dividida en dos paneles:
+/// - Izquierdo: lista de configuraciones SSH guardadas.
 /// - Derecho: formulario de login para conectarse vía SSH.
 class CustomFormScreen extends StatefulWidget {
   @override
@@ -46,7 +53,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     super.dispose();
   }
 
-  /// Función que establece la conexión SSH con Proxmox usando una clave privada.
+  /// Conecta vía SSH usando clave privada.
   Future<SSHClient> connectToProxmox({
     required String host,
     required int port,
@@ -54,19 +61,15 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     required String keyPath,
   }) async {
     try {
-      // Conectar al host en el puerto indicado.
       final socket = await SSHSocket.connect(host, port);
-      // Leer el contenido del archivo de clave privada.
       final keyString = await File(keyPath).readAsString();
-      // Convertir el contenido PEM en un objeto SSHPrivateKey usando el método actualizado.
       final privateKey = SSHKeyPair.fromPem(keyString);
-      // Crear el cliente SSH utilizando la clave privada.
       final client = SSHClient(
         socket,
         username: username,
         identities: privateKey,
       );
-      print('Conexión SSH establecida con $host:$port usando clave privada.');
+      print('Conexión SSH establecida con $host:$port.');
       return client;
     } catch (e) {
       print('Error al conectar a Proxmox: $e');
@@ -74,19 +77,16 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     }
   }
 
-  /// Carga las configuraciones guardadas desde el archivo JSON.
+  /// Carga las configuraciones guardadas desde un archivo JSON.
   Future<List<dynamic>> _loadSavedConfigs() async {
     final directory = await getApplicationDocumentsDirectory();
-    final file = File(path.join(directory.path, 'proxmox_config.json'));
+    final file = File(p.join(directory.path, 'proxmox_config.json'));
     if (await file.exists()) {
       final content = await file.readAsString();
       try {
         final decoded = jsonDecode(content);
-        if (decoded is List) {
-          return decoded;
-        } else if (decoded is Map) {
-          return [decoded];
-        }
+        if (decoded is List) return decoded;
+        if (decoded is Map) return [decoded];
       } catch (e) {
         print("Error al decodificar JSON: $e");
       }
@@ -94,8 +94,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     return [];
   }
 
-  /// Guarda la configuración actual en un archivo JSON.
-  /// Se agrega la configuración al final de una lista.
+  /// Guarda la configuración actual agregándola a una lista en un archivo JSON.
   Future<void> _saveConfigurationToJson() async {
     final config = {
       'host': _hostController.text,
@@ -105,17 +104,15 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     };
 
     final directory = await getApplicationDocumentsDirectory();
-    final file = File(path.join(directory.path, 'proxmox_config.json'));
+    final file = File(p.join(directory.path, 'proxmox_config.json'));
     List<dynamic> configs = [];
     if (await file.exists()) {
       final content = await file.readAsString();
       try {
         final decoded = jsonDecode(content);
-        if (decoded is List) {
+        if (decoded is List)
           configs = decoded;
-        } else if (decoded is Map) {
-          configs = [decoded];
-        }
+        else if (decoded is Map) configs = [decoded];
       } catch (e) {
         configs = [];
       }
@@ -123,11 +120,10 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     configs.add(config);
     await file.writeAsString(jsonEncode(configs));
     print('Configuración guardada en: ${file.path}');
-    // Actualizamos la UI para mostrar la nueva configuración
     setState(() {});
   }
 
-  /// Función que se invoca al pulsar el botón "Conectar".
+  /// Al pulsar "Conectar", se conecta y se lanza el explorador de archivos.
   Future<void> _connect() async {
     try {
       SSHClient client = await connectToProxmox(
@@ -137,30 +133,37 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
         keyPath: _keyPathController.text,
       );
 
-      // Guarda la configuración en el JSON (se acumulan todas las conexiones)
+      // Guarda la configuración.
       await _saveConfigurationToJson();
 
-      // Muestra diálogo de conexión exitosa.
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text("Conexión exitosa"),
-          content: Text(
-              "Conectado a ${_hostController.text}:${_portController.text}"),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-              },
-              child: Text("Aceptar"),
-            ),
-          ],
+      // Ejecutar "ls -p" en el directorio actual (".")
+      final session = await client.execute("ls -p");
+      final lsOutput =
+          await session.stdout.cast<List<int>>().transform(utf8.decoder).join();
+      List<String> lines =
+          lsOutput.split('\n').where((line) => line.trim().isNotEmpty).toList();
+      List<FileEntry> fileEntries = lines.map((line) {
+        bool isDir = line.endsWith("/");
+        String name = isDir ? line.substring(0, line.length - 1) : line;
+        return FileEntry(name: name, isDirectory: isDir);
+      }).toList();
+
+      client.close();
+
+      // Navegar al explorador de archivos, pasando las credenciales y el directorio inicial (".")
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => FileBrowserScreen(
+            host: _hostController.text,
+            port: int.parse(_portController.text),
+            username: _userController.text,
+            keyPath: _keyPathController.text,
+            initialPath: ".",
+          ),
         ),
       );
-      // Cierra la conexión cuando ya no se necesite.
-      client.close();
     } catch (e) {
-      // Muestra error en caso de fallo.
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -168,9 +171,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
           content: Text("No se pudo conectar: $e"),
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-              },
+              onPressed: () => Navigator.pop(context),
               child: Text("Aceptar"),
             ),
           ],
@@ -179,19 +180,17 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     }
   }
 
-  /// Panel izquierdo: muestra la lista de configuraciones SSH guardadas.
+  /// Panel izquierdo: lista de configuraciones guardadas.
   Widget _buildSavedConfigsPanel() {
     return FutureBuilder<List<dynamic>>(
       future: _loadSavedConfigs(),
       builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
+        if (snapshot.connectionState == ConnectionState.waiting)
           return Center(child: CircularProgressIndicator());
-        }
-        if (!snapshot.hasData || snapshot.data!.isEmpty) {
+        if (!snapshot.hasData || snapshot.data!.isEmpty)
           return Center(
               child: Text("No hay configuraciones guardadas",
                   style: TextStyle(color: Colors.white, fontSize: 16)));
-        }
         final configs = snapshot.data!;
         return ListView.builder(
           padding: EdgeInsets.all(16),
@@ -207,7 +206,6 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
                 ),
                 subtitle: Text("Usuario: ${config['username']}"),
                 onTap: () {
-                  // Al tocar, se rellenan los campos del login con la configuración seleccionada.
                   setState(() {
                     _hostController.text = config['host'];
                     _portController.text = config['port'].toString();
@@ -223,7 +221,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
     );
   }
 
-  /// Panel derecho: formulario de login para conectarse vía SSH.
+  /// Panel derecho: formulario de login.
   Widget _buildLoginPanel() {
     return Padding(
       padding: const EdgeInsets.all(16.0),
@@ -283,7 +281,6 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
             ElevatedButton(
               onPressed: _connect,
               style: ElevatedButton.styleFrom(
-                // primary: Colors.blue,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(30),
                 ),
@@ -311,7 +308,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
 
           return Stack(
             children: [
-              // CustomPainter que dibuja el fondo de cada panel y el divisor.
+              // Fondo dividido con CustomPainter.
               CustomPaint(
                 size: Size(width, height),
                 painter: SplitScreenPainter(),
@@ -340,7 +337,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
   }
 }
 
-/// CustomPainter que dibuja dos fondos distintos para cada panel y un divisor vertical.
+/// CustomPainter que dibuja dos fondos para cada panel y un divisor vertical.
 class SplitScreenPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
@@ -365,7 +362,7 @@ class SplitScreenPainter extends CustomPainter {
       ).createShader(rightRect);
     canvas.drawRect(rightRect, rightPaint);
 
-    // Línea divisoria vertical.
+    // Línea divisoria.
     Paint dividerPaint = Paint()
       ..color = Colors.white70
       ..strokeWidth = 2;
@@ -378,4 +375,229 @@ class SplitScreenPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+/// Pantalla de exploración de archivos vía SSH.
+/// Implementa la doble pulsación para seleccionar un elemento y, si se vuelve a pulsar,
+/// navegar en el caso de las carpetas.
+class FileBrowserScreen extends StatefulWidget {
+  final String host;
+  final int port;
+  final String username;
+  final String keyPath;
+  final String initialPath;
+
+  const FileBrowserScreen({
+    Key? key,
+    required this.host,
+    required this.port,
+    required this.username,
+    required this.keyPath,
+    required this.initialPath,
+  }) : super(key: key);
+
+  @override
+  _FileBrowserScreenState createState() => _FileBrowserScreenState();
+}
+
+class _FileBrowserScreenState extends State<FileBrowserScreen> {
+  late String currentPath;
+  List<FileEntry> fileList = [];
+  bool loading = true;
+  final double lineHeight = 36; // Alto fijo para cada línea
+
+  // Variables para controlar la posición del tap y la selección
+  Offset? _lastTapDownPosition;
+  int? _selectedIndex; // índice del elemento seleccionado
+
+  @override
+  void initState() {
+    super.initState();
+    currentPath = widget.initialPath;
+    _listDirectory();
+  }
+
+  /// Lista el directorio actual usando "cd ... && ls -p".
+  Future<void> _listDirectory() async {
+    setState(() {
+      loading = true;
+      _selectedIndex = null; // Se limpia la selección al actualizar
+    });
+    try {
+      SSHClient client = await _connectSSH();
+      final command = currentPath == "."
+          ? "ls -p"
+          : "cd '${currentPath.replaceAll("'", "\\'")}' && ls -p";
+      final session = await client.execute(command);
+      final lsOutput =
+          await session.stdout.cast<List<int>>().transform(utf8.decoder).join();
+      List<String> lines =
+          lsOutput.split('\n').where((l) => l.trim().isNotEmpty).toList();
+
+      List<FileEntry> entries = lines.map((line) {
+        bool isDir = line.endsWith("/");
+        String name = isDir ? line.substring(0, line.length - 1) : line;
+        return FileEntry(name: name, isDirectory: isDir);
+      }).toList();
+      // Si no estamos en la raíz, agregamos la entrada para volver ("..")
+      if (currentPath != "." && currentPath != "/") {
+        entries.insert(0, FileEntry(name: "..", isDirectory: true));
+      }
+      client.close();
+      setState(() {
+        fileList = entries;
+        loading = false;
+      });
+    } catch (e) {
+      print("Error listando directorio: $e");
+      setState(() {
+        loading = false;
+      });
+    }
+  }
+
+  /// Conecta vía SSH usando las credenciales del widget.
+  Future<SSHClient> _connectSSH() async {
+    final socket = await SSHSocket.connect(widget.host, widget.port);
+    final keyString = await File(widget.keyPath).readAsString();
+    final privateKey = SSHKeyPair.fromPem(keyString);
+    final client = SSHClient(
+      socket,
+      username: widget.username,
+      identities: privateKey,
+    );
+    return client;
+  }
+
+  /// Maneja la doble pulsación:
+  /// - Si el elemento aún no estaba seleccionado, se marca como seleccionado.
+  /// - Si ya estaba seleccionado y es una carpeta (o la entrada especial ".."), se navega.
+  void _handleDoubleTap() {
+    if (_lastTapDownPosition == null) return;
+    final tappedIndex = ((_lastTapDownPosition!.dy - 20) / lineHeight).floor();
+    if (tappedIndex < 0 || tappedIndex >= fileList.length) return;
+    final tappedEntry = fileList[tappedIndex];
+
+    if (_selectedIndex == tappedIndex) {
+      // Ya estaba seleccionado: si es carpeta o "..", navega; si es archivo, se puede implementar otra acción.
+      if (tappedEntry.name == "..") {
+        _goBack();
+      } else if (tappedEntry.isDirectory) {
+        setState(() {
+          currentPath = currentPath == "."
+              ? tappedEntry.name
+              : p.join(currentPath, tappedEntry.name);
+          _selectedIndex = null; // Limpiar la selección al navegar
+        });
+        _listDirectory();
+      } else {
+        print("Archivo seleccionado: ${tappedEntry.name}");
+      }
+    } else {
+      // Si aún no estaba seleccionado, se marca la selección.
+      setState(() {
+        _selectedIndex = tappedIndex;
+      });
+    }
+  }
+
+  /// Retrocede al directorio padre.
+  void _goBack() {
+    String parent = p.dirname(currentPath);
+    if (parent == "." || parent == "/" || parent == currentPath) {
+      parent = ".";
+    }
+    setState(() {
+      currentPath = parent;
+      _selectedIndex = null;
+    });
+    _listDirectory();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text("Explorador: $currentPath"),
+        leading: currentPath != "." && currentPath != "/"
+            ? IconButton(icon: Icon(Icons.arrow_back), onPressed: _goBack)
+            : null,
+      ),
+      body: loading
+          ? Center(child: CircularProgressIndicator())
+          : GestureDetector(
+              // Capturamos la posición del tap.
+              onTapDown: (details) {
+                _lastTapDownPosition = details.localPosition;
+              },
+              // Se ejecuta al hacer doble clic.
+              onDoubleTap: _handleDoubleTap,
+              child: CustomPaint(
+                painter: FileListPainter(
+                  fileList: fileList,
+                  lineHeight: lineHeight,
+                  selectedIndex: _selectedIndex,
+                ),
+                child: Container(),
+              ),
+            ),
+    );
+  }
+}
+
+/// CustomPainter que dibuja la lista de archivos, distinguiendo carpetas y archivos,
+/// e incluye la entrada especial para volver ("..").
+/// Resalta el elemento seleccionado.
+class FileListPainter extends CustomPainter {
+  final List<FileEntry> fileList;
+  final double lineHeight;
+  final int? selectedIndex;
+  FileListPainter({
+    required this.fileList,
+    required this.lineHeight,
+    this.selectedIndex,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final textStyleFile = TextStyle(color: Colors.black87, fontSize: 16);
+    final textStyleDir = TextStyle(
+        color: Colors.blue.shade800, fontSize: 16, fontWeight: FontWeight.bold);
+    final textStyleParent = TextStyle(
+        color: Colors.redAccent, fontSize: 16, fontWeight: FontWeight.bold);
+    final textPainter = TextPainter(textDirection: TextDirection.ltr);
+    double y = 20; // margen superior
+
+    for (int i = 0; i < fileList.length; i++) {
+      final entry = fileList[i];
+
+      // Si este elemento está seleccionado, se dibuja un fondo resaltado.
+      if (selectedIndex != null && selectedIndex == i) {
+        Paint highlightPaint = Paint()..color = Colors.yellow.withOpacity(0.3);
+        canvas.drawRect(
+            Rect.fromLTWH(0, y, size.width, lineHeight), highlightPaint);
+      }
+
+      String displayText;
+      TextStyle style;
+      if (entry.name == "..") {
+        displayText = "⬆️ ..";
+        style = textStyleParent;
+      } else {
+        displayText =
+            entry.isDirectory ? "📁 ${entry.name}" : "📄 ${entry.name}";
+        style = entry.isDirectory ? textStyleDir : textStyleFile;
+      }
+      textPainter.text = TextSpan(text: displayText, style: style);
+      textPainter.layout(maxWidth: size.width - 20);
+      textPainter.paint(canvas, Offset(10, y));
+      y += lineHeight;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant FileListPainter oldDelegate) {
+    return oldDelegate.fileList != fileList ||
+        oldDelegate.selectedIndex != selectedIndex;
+  }
 }
