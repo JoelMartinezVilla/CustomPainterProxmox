@@ -701,6 +701,16 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                 ],
               ),
             ),
+
+            bottomNavigationBar: containsPackageJson(fileList)
+            ? SizedBox(
+                height: 50,
+                child: CustomPaint(
+                  painter: BlueBarPainter(connected: /*AQUI EN VEZ DE TRUE TIENE QUE IR EL BOOLEANO QUE COMPRUEBA SI EL SERVER SE ENCIENDE BIEN*/true, port: 20217),
+                  child: Container(),
+                ),
+              )
+            : null,
     );
   }
 }
@@ -760,3 +770,71 @@ class FileListPainter extends CustomPainter {
         oldDelegate.selectedIndex != selectedIndex;
   }
 }
+
+bool containsPackageJson(List<FileEntry> fileList) {
+  return fileList.any((file) => file.name == "package.json");
+}
+
+class BlueBarPainter extends CustomPainter {
+  final bool connected;
+  final int? port;
+
+  BlueBarPainter({required this.connected, this.port});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Pintura para la barra azul
+    final paint = Paint()
+      ..color = Colors.blue
+      ..style = PaintingStyle.fill;
+
+    // Dibuja el rectángulo azul que ocupa toda la barra
+    final rect = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.drawRect(rect, paint);
+
+    // Pintura para el círculo de estado
+    final circlePaint = Paint()
+      ..color = connected ? Colors.green : Colors.red
+      ..style = PaintingStyle.fill;
+
+    final circleRadius = size.height * 0.25;
+    final circleCenter = Offset(size.height * 0.5, size.height * 0.5);
+
+    // Dibuja el círculo
+    canvas.drawCircle(circleCenter, circleRadius, circlePaint);
+
+
+    // Definir el texto según el estado
+    final String text = connected ? "Servidor NodeJS funcionant al port ${port}" : "ERROR: El servidor NodeJS no esta funcionant";
+
+    // Configuración del texto
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size.height * 0.3, // Ajusta el tamaño del texto
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+      textAlign: TextAlign.center,
+    );
+
+    textPainter.layout(minWidth: 0, maxWidth: size.width);
+
+    // Posición centrada del texto en la barra
+    final textX = (size.width - textPainter.width) / 2;
+    final textY = (size.height - textPainter.height) / 2;
+
+    // Dibuja el texto
+    textPainter.paint(canvas, Offset(textX, textY));
+  }
+
+  @override
+  bool shouldRepaint(covariant BlueBarPainter oldDelegate) {
+    return oldDelegate.connected != connected;
+  }
+}
+
+
