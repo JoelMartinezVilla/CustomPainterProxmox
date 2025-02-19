@@ -406,7 +406,10 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   bool loading = true;
   final double lineHeight = 36; // Alto fijo para cada línea
 
-  // Variables para controlar la posición del tap y la selección
+  // GlobalKey para obtener las coordenadas locales correctas.
+  final GlobalKey _paintKey = GlobalKey();
+
+  // Variables para controlar la posición del tap y la selección.
   Offset? _lastTapDownPosition;
   int? _selectedIndex; // índice del elemento seleccionado
 
@@ -421,7 +424,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   Future<void> _listDirectory() async {
     setState(() {
       loading = true;
-      _selectedIndex = null; // Se limpia la selección al actualizar
+      _selectedIndex = null; // Se limpia la selección al actualizar.
     });
     try {
       SSHClient client = await _connectSSH();
@@ -474,12 +477,13 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   /// - Si ya estaba seleccionado y es una carpeta (o la entrada especial ".."), se navega.
   void _handleDoubleTap() {
     if (_lastTapDownPosition == null) return;
+    // Se resta el margen (20) que se usa en el painter.
     final tappedIndex = ((_lastTapDownPosition!.dy - 20) / lineHeight).floor();
     if (tappedIndex < 0 || tappedIndex >= fileList.length) return;
     final tappedEntry = fileList[tappedIndex];
 
     if (_selectedIndex == tappedIndex) {
-      // Ya estaba seleccionado: si es carpeta o "..", navega; si es archivo, se puede implementar otra acción.
+      // Si ya estaba seleccionado: si es carpeta o "..", navega.
       if (tappedEntry.name == "..") {
         _goBack();
       } else if (tappedEntry.isDirectory) {
@@ -487,7 +491,7 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           currentPath = currentPath == "."
               ? tappedEntry.name
               : p.join(currentPath, tappedEntry.name);
-          _selectedIndex = null; // Limpiar la selección al navegar
+          _selectedIndex = null; // Limpiar la selección al navegar.
         });
         _listDirectory();
       } else {
@@ -526,13 +530,22 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       body: loading
           ? Center(child: CircularProgressIndicator())
           : GestureDetector(
-              // Capturamos la posición del tap.
+              // Utilizamos onTapDown para obtener la posición del toque
+              // y convertirla a coordenadas locales del widget CustomPaint.
               onTapDown: (details) {
-                _lastTapDownPosition = details.localPosition;
+                final box =
+                    _paintKey.currentContext?.findRenderObject() as RenderBox?;
+                if (box != null) {
+                  _lastTapDownPosition =
+                      box.globalToLocal(details.globalPosition);
+                } else {
+                  _lastTapDownPosition = details.localPosition;
+                }
               },
               // Se ejecuta al hacer doble clic.
               onDoubleTap: _handleDoubleTap,
               child: CustomPaint(
+                key: _paintKey,
                 painter: FileListPainter(
                   fileList: fileList,
                   lineHeight: lineHeight,
