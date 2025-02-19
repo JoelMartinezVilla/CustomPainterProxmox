@@ -28,9 +28,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-/// Pantalla dividida en dos paneles:
-/// - Izquierdo: lista de configuraciones SSH guardadas.
-/// - Derecho: formulario de login para conectarse vía SSH.
 class CustomFormScreen extends StatefulWidget {
   @override
   _CustomFormScreenState createState() => _CustomFormScreenState();
@@ -95,6 +92,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
   }
 
   /// Guarda la configuración actual agregándola a una lista en un archivo JSON.
+  /// Si la configuración ya existe, no se añade de nuevo.
   Future<void> _saveConfigurationToJson() async {
     final config = {
       'host': _hostController.text,
@@ -117,9 +115,19 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
         configs = [];
       }
     }
-    configs.add(config);
-    await file.writeAsString(jsonEncode(configs));
-    print('Configuración guardada en: ${file.path}');
+    // Verificamos si la configuración ya existe.
+    bool exists = configs.any((c) =>
+        c['host'] == config['host'] &&
+        c['port'] == config['port'] &&
+        c['username'] == config['username'] &&
+        c['keyPath'] == config['keyPath']);
+    if (!exists) {
+      configs.add(config);
+      await file.writeAsString(jsonEncode(configs));
+      print('Configuración guardada en: ${file.path}');
+    } else {
+      print('La configuración ya existe, no se añade.');
+    }
     setState(() {});
   }
 
@@ -133,7 +141,7 @@ class _CustomFormScreenState extends State<CustomFormScreen> {
         keyPath: _keyPathController.text,
       );
 
-      // Guarda la configuración.
+      // Guarda la configuración (si no existe).
       await _saveConfigurationToJson();
 
       // Ejecutar "ls -p" en el directorio actual (".")
@@ -378,8 +386,6 @@ class SplitScreenPainter extends CustomPainter {
 }
 
 /// Pantalla de exploración de archivos vía SSH.
-/// Implementa la doble pulsación para seleccionar un elemento y, si se vuelve a pulsar,
-/// navegar en el caso de las carpetas.
 class FileBrowserScreen extends StatefulWidget {
   final String host;
   final int port;
@@ -404,12 +410,13 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
   late String currentPath;
   List<FileEntry> fileList = [];
   bool loading = true;
-  final double lineHeight = 36; // Alto fijo para cada línea
+  // Altura de cada línea para facilitar el clic.
+  final double lineHeight = 50;
 
   // GlobalKey para obtener las coordenadas locales correctas.
   final GlobalKey _paintKey = GlobalKey();
 
-  // Variables para controlar la posición del tap y la selección.
+  // Variable para controlar la posición del tap y la selección.
   Offset? _lastTapDownPosition;
   int? _selectedIndex; // índice del elemento seleccionado
 
@@ -472,18 +479,20 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     return client;
   }
 
-  /// Maneja la doble pulsación:
-  /// - Si el elemento aún no estaba seleccionado, se marca como seleccionado.
-  /// - Si ya estaba seleccionado y es una carpeta (o la entrada especial ".."), se navega.
-  void _handleDoubleTap() {
+  /// Maneja el clic único:
+  /// - Si se toca un elemento por primera vez, se selecciona.
+  /// - Si se toca de nuevo el mismo elemento (ya seleccionado):
+  ///    • Si es "..", retrocede.
+  ///    • Si es una carpeta, se navega.
+  ///    • Si es un archivo, se muestra la información.
+  void _handleTap() {
     if (_lastTapDownPosition == null) return;
-    // Se resta el margen (20) que se usa en el painter.
     final tappedIndex = ((_lastTapDownPosition!.dy - 20) / lineHeight).floor();
     if (tappedIndex < 0 || tappedIndex >= fileList.length) return;
     final tappedEntry = fileList[tappedIndex];
 
     if (_selectedIndex == tappedIndex) {
-      // Si ya estaba seleccionado: si es carpeta o "..", navega.
+      // Si ya estaba seleccionado, se abre la carpeta o se muestra info si es archivo.
       if (tappedEntry.name == "..") {
         _goBack();
       } else if (tappedEntry.isDirectory) {
@@ -491,14 +500,14 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
           currentPath = currentPath == "."
               ? tappedEntry.name
               : p.join(currentPath, tappedEntry.name);
-          _selectedIndex = null; // Limpiar la selección al navegar.
+          _selectedIndex = null;
         });
         _listDirectory();
       } else {
-        print("Archivo seleccionado: ${tappedEntry.name}");
+        _showFileInfo();
       }
     } else {
-      // Si aún no estaba seleccionado, se marca la selección.
+      // Si no estaba seleccionado, solo se marca la selección.
       setState(() {
         _selectedIndex = tappedIndex;
       });
@@ -518,6 +527,123 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
     _listDirectory();
   }
 
+  /// Muestra la información (metadata y permisos) del archivo o carpeta seleccionado.
+  Future<void> _showFileInfo() async {
+    if (_selectedIndex == null || _selectedIndex! >= fileList.length) return;
+    FileEntry entry = fileList[_selectedIndex!];
+    if (entry.name == "..")
+      return; // No se muestra info para la entrada de retroceso.
+    String filePath;
+    if (currentPath == "." || currentPath == "/") {
+      filePath = entry.name;
+    } else {
+      filePath = p.join(currentPath, entry.name);
+    }
+
+    try {
+      SSHClient client = await _connectSSH();
+      // Se utiliza "ls -ld" para obtener la metadata y permisos.
+      String command = "ls -ld '${filePath.replaceAll("'", "\\'")}'";
+      final session = await client.execute(command);
+      String result =
+          await session.stdout.cast<List<int>>().transform(utf8.decoder).join();
+      client.close();
+
+      // Se intenta parsear el resultado en tokens.
+      List<String> tokens = result.trim().split(RegExp(r'\s+'));
+      Widget contentWidget;
+      if (tokens.length >= 9) {
+        String permissions = tokens[0];
+        String owner = tokens[2];
+        String group = tokens[3];
+        String size = tokens[4];
+        String date = "${tokens[7]} ${tokens[5]} ${tokens[6]} ${tokens[8]}";
+        String name = tokens.sublist(9).join(" ");
+
+        contentWidget = Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text("Permisos:",
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+            Text(permissions, style: TextStyle(fontSize: 16)),
+            SizedBox(height: 8),
+            Text("Usuario:",
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+            Text(owner, style: TextStyle(fontSize: 16)),
+            SizedBox(height: 8),
+            Text("Grupo:",
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+            Text(group, style: TextStyle(fontSize: 16)),
+            SizedBox(height: 8),
+            Text("Tamaño:",
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+            Text(size, style: TextStyle(fontSize: 16)),
+            SizedBox(height: 8),
+            Text("Fecha:",
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+            Text(date, style: TextStyle(fontSize: 16)),
+            SizedBox(height: 8),
+            Text("Nombre:",
+                style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey)),
+            Text(name, style: TextStyle(fontSize: 16)),
+          ],
+        );
+      } else {
+        contentWidget = Text(result);
+      }
+
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text("Información de ${entry.name}"),
+          content: SingleChildScrollView(child: contentWidget),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("Cerrar"),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          title: Text("Error"),
+          content: Text("No se pudo obtener la información: $e"),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text("Cerrar"),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -529,38 +655,53 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       ),
       body: loading
           ? Center(child: CircularProgressIndicator())
-          : GestureDetector(
-              // Utilizamos onTapDown para obtener la posición del toque
-              // y convertirla a coordenadas locales del widget CustomPaint.
-              onTapDown: (details) {
-                final box =
-                    _paintKey.currentContext?.findRenderObject() as RenderBox?;
-                if (box != null) {
-                  _lastTapDownPosition =
-                      box.globalToLocal(details.globalPosition);
-                } else {
-                  _lastTapDownPosition = details.localPosition;
-                }
-              },
-              // Se ejecuta al hacer doble clic.
-              onDoubleTap: _handleDoubleTap,
-              child: CustomPaint(
-                key: _paintKey,
-                painter: FileListPainter(
-                  fileList: fileList,
-                  lineHeight: lineHeight,
-                  selectedIndex: _selectedIndex,
+          : Stack(
+              children: [
+                GestureDetector(
+                  onTapDown: (details) {
+                    final box = _paintKey.currentContext?.findRenderObject()
+                        as RenderBox?;
+                    if (box != null) {
+                      _lastTapDownPosition =
+                          box.globalToLocal(details.globalPosition);
+                    } else {
+                      _lastTapDownPosition = details.localPosition;
+                    }
+                  },
+                  // Usamos onTap para el clic único.
+                  onTap: _handleTap,
+                  child: CustomPaint(
+                    key: _paintKey,
+                    painter: FileListPainter(
+                      fileList: fileList,
+                      lineHeight: lineHeight,
+                      selectedIndex: _selectedIndex,
+                    ),
+                    child: Container(),
+                  ),
                 ),
-                child: Container(),
-              ),
+                if (_selectedIndex != null &&
+                    _selectedIndex! < fileList.length &&
+                    fileList[_selectedIndex!].name != "..")
+                  Positioned(
+                    right: 10,
+                    top: 20 +
+                        _selectedIndex! * lineHeight +
+                        (lineHeight - 24) / 2,
+                    child: IconButton(
+                      icon: Icon(Icons.info_outline,
+                          color: Colors.blue, size: 24),
+                      onPressed: _showFileInfo,
+                    ),
+                  ),
+              ],
             ),
     );
   }
 }
 
 /// CustomPainter que dibuja la lista de archivos, distinguiendo carpetas y archivos,
-/// e incluye la entrada especial para volver ("..").
-/// Resalta el elemento seleccionado.
+/// e incluye la entrada especial para volver (".."). Se resalta el elemento seleccionado.
 class FileListPainter extends CustomPainter {
   final List<FileEntry> fileList;
   final double lineHeight;
@@ -584,7 +725,7 @@ class FileListPainter extends CustomPainter {
     for (int i = 0; i < fileList.length; i++) {
       final entry = fileList[i];
 
-      // Si este elemento está seleccionado, se dibuja un fondo resaltado.
+      // Si el elemento está seleccionado, se dibuja un fondo resaltado.
       if (selectedIndex != null && selectedIndex == i) {
         Paint highlightPaint = Paint()..color = Colors.yellow.withOpacity(0.3);
         canvas.drawRect(
