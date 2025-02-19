@@ -655,46 +655,51 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
       ),
       body: loading
           ? Center(child: CircularProgressIndicator())
-          : Stack(
-              children: [
-                GestureDetector(
-                  onTapDown: (details) {
-                    final box = _paintKey.currentContext?.findRenderObject()
-                        as RenderBox?;
-                    if (box != null) {
-                      _lastTapDownPosition =
-                          box.globalToLocal(details.globalPosition);
-                    } else {
-                      _lastTapDownPosition = details.localPosition;
-                    }
-                  },
-                  // Usamos onTap para el clic único.
-                  onTap: _handleTap,
-                  child: CustomPaint(
-                    key: _paintKey,
-                    painter: FileListPainter(
-                      fileList: fileList,
-                      lineHeight: lineHeight,
-                      selectedIndex: _selectedIndex,
-                    ),
-                    child: Container(),
-                  ),
-                ),
-                if (_selectedIndex != null &&
-                    _selectedIndex! < fileList.length &&
-                    fileList[_selectedIndex!].name != "..")
-                  Positioned(
-                    right: 10,
-                    top: 20 +
-                        _selectedIndex! * lineHeight +
-                        (lineHeight - 24) / 2,
-                    child: IconButton(
-                      icon: Icon(Icons.info_outline,
-                          color: Colors.blue, size: 24),
-                      onPressed: _showFileInfo,
+          : SingleChildScrollView(
+              child: Stack(
+                children: [
+                  GestureDetector(
+                    onTapDown: (details) {
+                      final box = _paintKey.currentContext?.findRenderObject()
+                          as RenderBox?;
+                      if (box != null) {
+                        _lastTapDownPosition =
+                            box.globalToLocal(details.globalPosition);
+                      } else {
+                        _lastTapDownPosition = details.localPosition;
+                      }
+                    },
+                    onTap: _handleTap,
+                    child: CustomPaint(
+                      key: _paintKey,
+                      painter: FileListPainter(
+                        fileList: fileList,
+                        lineHeight: lineHeight,
+                        selectedIndex: _selectedIndex,
+                      ),
+                      // Se usa un SizedBox para definir la altura total de la lista:
+                      child: SizedBox(
+                        width: MediaQuery.of(context).size.width,
+                        height: 20 +
+                            fileList.length *
+                                lineHeight, // 20 es el margen superior
+                      ),
                     ),
                   ),
-              ],
+                  if (_selectedIndex != null &&
+                      _selectedIndex! < fileList.length &&
+                      fileList[_selectedIndex!].name != "..")
+                    Positioned(
+                      right: 10,
+                      top: 20 + _selectedIndex! * lineHeight,
+                      child: IconButton(
+                        icon: Icon(Icons.info_outline,
+                            color: Colors.blue, size: 24),
+                        onPressed: _showFileInfo,
+                      ),
+                    ),
+                ],
+              ),
             ),
     );
   }
