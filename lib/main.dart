@@ -690,27 +690,35 @@ class _FileBrowserScreenState extends State<FileBrowserScreen> {
                       _selectedIndex! < fileList.length &&
                       fileList[_selectedIndex!].name != "..")
                     Positioned(
-                      right: 10,
-                      top: 20 + _selectedIndex! * lineHeight,
-                      child: IconButton(
-                        icon: Icon(Icons.info_outline,
-                            color: Colors.blue, size: 24),
-                        onPressed: _showFileInfo,
-                      ),
-                    ),
+                        right: 10,
+                        top: 20 + _selectedIndex! * lineHeight,
+                        child: IconButton(
+                          icon: Icon(Icons.info_outline,
+                              color: Colors.blue, size: 24),
+                          onPressed: _showFileInfo,
+                        )),
+                  // Positioned(
+                  //     right: 40,
+                  //     top: 20 + _selectedIndex! * lineHeight,
+                  //     child: IconButton(
+                  //       icon: Icon(Icons.edit, color: Colors.grey, size: 24),
+                  //       onPressed: _renameSelected,
+                  //     ))
                 ],
               ),
             ),
-
-            bottomNavigationBar: containsPackageJson(fileList)
-            ? SizedBox(
-                height: 50,
-                child: CustomPaint(
-                  painter: BlueBarPainter(connected: /*AQUI EN VEZ DE TRUE TIENE QUE IR EL BOOLEANO QUE COMPRUEBA SI EL SERVER SE ENCIENDE BIEN*/true, port: 20217),
-                  child: Container(),
-                ),
-              )
-            : null,
+      bottomNavigationBar: containsPackageJson(fileList)
+          ? SizedBox(
+              height: 50,
+              child: CustomPaint(
+                painter: BlueBarPainter(
+                    connected: /*AQUI EN VEZ DE TRUE TIENE QUE IR EL BOOLEANO QUE COMPRUEBA SI EL SERVER SE ENCIENDE BIEN*/
+                        true,
+                    port: 20217),
+                child: Container(),
+              ),
+            )
+          : null,
     );
   }
 }
@@ -803,9 +811,10 @@ class BlueBarPainter extends CustomPainter {
     // Dibuja el círculo
     canvas.drawCircle(circleCenter, circleRadius, circlePaint);
 
-
     // Definir el texto según el estado
-    final String text = connected ? "Servidor NodeJS funcionant al port ${port}" : "ERROR: El servidor NodeJS no esta funcionant";
+    final String text = connected
+        ? "Servidor NodeJS funcionant al port ${port}"
+        : "ERROR: El servidor NodeJS no esta funcionant";
 
     // Configuración del texto
     final textPainter = TextPainter(
@@ -836,5 +845,3 @@ class BlueBarPainter extends CustomPainter {
     return oldDelegate.connected != connected;
   }
 }
-
-
